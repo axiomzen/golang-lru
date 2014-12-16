@@ -5,33 +5,51 @@ package lru
 
 import (
 	"container/list"
-	"errors"
+	//"errors"
+	"fmt"
 	"sync"
+)
+
+var (
+	//ErrKeyExists = fmt.Errorf("item already exists")
+	ErrInvalidSize = fmt.Errorf("Must provide a positive size")
+
+//ErrCacheMiss = fmt.Errorf("item not found")
 )
 
 // Cache is a thread-safe fixed size LRU cache.
 type Cache struct {
-	size      int
-	evictList *list.List
-	items     map[interface{}]*list.Element
-	lock      sync.Mutex
+	maxEntries int
+	evictList  *list.List
+	items      map[interface{}]*list.Element
+
+	// OnEvicted optionally specificies a callback function to be
+	// executed when an entry is purged from the cache.
+	OnEvicted func(key Key, value interface{})
+
+	// todo: experiment with a full Mutex and RWMutex
+	//lock sync.Mutex
+	lock sync.RWMutex
 }
+
+// A Key may be any value that is comparable. See http://golang.org/ref/spec#Comparison_operators
+type Key interface{}
 
 // entry is used to hold a value in the evictList
 type entry struct {
-	key   interface{}
+	key   Key
 	value interface{}
 }
 
 // New creates an LRU of the given size
 func New(size int) (*Cache, error) {
-	if size <= 0 {
-		return nil, errors.New("Must provide a positive size")
+	if size < 0 {
+		return nil, ErrInvalidSize
 	}
 	c := &Cache{
-		size:      size,
-		evictList: list.New(),
-		items:     make(map[interface{}]*list.Element, size),
+		maxEntries: size,
+		evictList:  list.New(),
+		items:      make(map[interface{}]*list.Element, size),
 	}
 	return c, nil
 }
@@ -41,11 +59,11 @@ func (c *Cache) Purge() {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.evictList = list.New()
-	c.items = make(map[interface{}]*list.Element, c.size)
+	c.items = make(map[interface{}]*list.Element, c.maxEntries)
 }
 
 // Add adds a value to the cache.
-func (c *Cache) Add(key, value interface{}) {
+func (c *Cache) Add(key Key, value interface{}) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -57,18 +75,17 @@ func (c *Cache) Add(key, value interface{}) {
 	}
 
 	// Add new item
-	ent := &entry{key, value}
-	entry := c.evictList.PushFront(ent)
+	entry := c.evictList.PushFront(&entry{key, value})
 	c.items[key] = entry
 
 	// Verify size not exceeded
-	if c.evictList.Len() > c.size {
+	if c.maxEntries != 0 && c.evictList.Len() > c.maxEntries {
 		c.removeOldest()
 	}
 }
 
 // Get looks up a key's value from the cache.
-func (c *Cache) Get(key interface{}) (value interface{}, ok bool) {
+func (c *Cache) Get(key Key) (value interface{}, ok bool) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -80,7 +97,7 @@ func (c *Cache) Get(key interface{}) (value interface{}, ok bool) {
 }
 
 // Remove removes the provided key from the cache.
-func (c *Cache) Remove(key interface{}) {
+func (c *Cache) Remove(key Key) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -124,11 +141,16 @@ func (c *Cache) removeElement(e *list.Element) {
 	c.evictList.Remove(e)
 	kv := e.Value.(*entry)
 	delete(c.items, kv.key)
+	if c.OnEvicted != nil {
+		c.OnEvicted(kv.key, kv.value)
+	}
 }
 
 // Len returns the number of items in the cache.
 func (c *Cache) Len() int {
-	c.lock.Lock()
-	defer c.lock.Unlock()
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	//c.lock.Lock()
+	//defer c.lock.Unlock()
 	return c.evictList.Len()
 }
