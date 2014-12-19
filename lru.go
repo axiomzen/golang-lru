@@ -106,6 +106,16 @@ func (c *Cache) Remove(key Key) {
 	}
 }
 
+func (c *Cache) RemoveBulk(keys []Key) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for _, key := range keys {
+		if ent, ok := c.items[key]; ok {
+			c.removeElement(ent)
+		}
+	}
+}
+
 // RemoveOldest removes the oldest item from the cache.
 func (c *Cache) RemoveOldest() {
 	c.lock.Lock()
